@@ -1,0 +1,528 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[29]:
+
+
+import pandas as pd
+import numpy as np
+import requests
+
+from IPython.display import display
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
+# # Data Collection
+
+# ##  Constants
+
+# In[30]:
+
+
+BASE_URL='http://api.worldbank.org/v2/'
+
+INDICATOR_CODES=['EN.ATM.CO2E.PC', 'EG.ELC.ACCS.ZS', 'EG.EGY.PRIM.PP.KD', 'EG.CFT.ACCS.ZS', 'EG.FEC.RNEW.ZS']
+
+COUNTRY_LIST=['USA', 'India', 'China', 'Japan', 'Canada', 'Great Britain', 'South Africa']
+
+
+featureMap={
+    "EN.ATM.CO2E.PC": "CO2 emissions (metric tons per capita)",
+    "EG.ELC.ACCS.ZS": "Access to electricity (% of population)",
+    "EG.EGY.PRIM.PP.KD": "Energy intensity level of primary energy (MJ/$2017 PPP GDP)",
+    "EG.CFT.ACCS.ZS": "Access to clean fuels and technologies for cooking (% of population)",
+    "EG.FEC.RNEW.ZS": "Renewable energy consumption (% of total final energy consumption)"
+}
+countryMap={
+    "US": "USA",
+    "IN":"India",
+    "CN": "China",
+    "JP": "Japan",
+    "CA": "Canada",
+    "GB": "Great Britain",
+    "ZA": "South Africa"
+}
+params = dict()
+params['format']='json'
+params['per_page']='100'
+params['date']='1960:2018'
+
+
+# ## Fetching data by using API
+
+# In[31]:
+
+
+def loadJSONData(country_code): 
+    dataList=[]
+    
+    for indicator in INDICATOR_CODES: 
+        
+        url=BASE_URL+'countries/'+country_code.lower()+'/indicators/'+indicator
+        
+        response = requests.get(url, params=params)
+        
+        if response.status_code == 200 and ("message" not in response.json()[0].keys()):
+            
+            indicatorVals=[]
+            
+            if len(response.json()) > 1:
+                
+                for obj in response.json()[1]:
+                    
+                    if obj['value'] == "" or obj['value'] is None:
+                        indicatorVals.append(None)
+                    else:
+                        indicatorVals.append(float(obj['value']))
+                dataList.append(indicatorVals)
+        else:
+            print("Error in Loading the data. Status Code: " + str(response.status_code))
+            
+    dataList.append([year for year in range(2018, 1959, -1)])
+    return dataList
+#----------------------------------------------------------------------------------------------------
+def getCountrywiseDF(country_code):
+    
+    col_list=list(featureMap.values())
+    col_list.append('Year')
+    print("------------------Loading data for: "+countryMap[country_code]+"-----------------------")
+    dataList=loadJSONData(country_code)
+    df=pd.DataFrame(np.column_stack(dataList), columns=col_list)
+    df['Country'] = countryMap[country_code]
+    display(df.head())
+    return df
+
+
+# In[32]:
+
+
+US_df=getCountrywiseDF('US')
+IN_df=getCountrywiseDF('IN')
+CN_df=getCountrywiseDF('CN')
+JP_df=getCountrywiseDF('JP')
+CA_df=getCountrywiseDF('CA')
+GB_df=getCountrywiseDF('GB')
+ZA_df=getCountrywiseDF('ZA')
+
+
+# # Data Pre-processing
+
+# In[33]:
+
+
+list_df=[US_df.copy(), IN_df.copy(), CN_df.copy(), JP_df.copy(), CA_df.copy(), GB_df.copy(), ZA_df.copy()]
+
+
+# ## Droping features with majority values missing
+
+# In[34]:
+
+
+def remove_missing_features(df):
+    
+    if df is None:
+        print("No DataFrame received!")
+        return
+    
+    df_cp=df.copy()
+    
+    print("Removing missing features for: " + df_cp.iloc[0]['Country'])
+    
+    n_missing_vals=df.isnull().sum()
+
+    n_missing_index_list = list(n_missing_vals.index)
+    
+    missing_percentage = n_missing_vals[n_missing_vals!=0]/df.shape[0]*100
+    
+    
+    cols_to_trim=[]
+    
+    for i,val in enumerate(missing_percentage):
+        if val > 75:
+            cols_to_trim.append(n_missing_index_list[i])
+
+
+    if len(cols_to_trim) > 0:
+        df_cp=df_cp.drop(columns=cols_to_trim)
+        print("Dropped Columns:" + str(cols_to_trim))
+    else:
+        print("No columns dropped")
+
+    return df_cp
+
+
+# In[36]:
+
+
+list_df=list(map(remove_missing_features, list_df))
+
+
+# ##  Filling missing values
+
+# In[37]:
+
+
+def fill_missing_values(df):
+    
+    if df is None:
+        print("No DataFrame received")
+        return
+
+    df_cp=df.copy()
+    
+    print("Filling missing features for: " + df_cp.iloc[0]['Country'])
+    
+    cols_list=list(df_cp.columns)
+    
+    cols_list.pop()
+    
+    df_cp.fillna(value=pd.np.nan, inplace=True)
+    
+    for col in cols_list:
+        df_cp[col].fillna((df_cp[col].mean()), inplace=True)
+
+    print("Filling missing values completed")
+    return df_cp
+
+
+# In[38]:
+
+
+list_df=list(map(fill_missing_values, list_df))
+
+
+# In[39]:
+
+
+def change_year_type(df):
+    
+    print("Changing type of Year for: " + df.loc[0]['Country'])
+    if 'Year' in df.columns:
+        df['Year'] = df.Year.astype(str)
+    
+    print("Completed changing type")
+    return df
+
+
+# In[40]:
+
+
+list_df=list(map(change_year_type, list_df))
+
+
+# ## Deriving deleted features
+
+# ## Checking the number of features
+
+# In[41]:
+
+
+print('Total number of features: %d\n'%(list_df[0].shape[1]))
+list_df[0].dtypes
+
+
+# In[42]:
+
+
+def write_data():
+    assert len(list(countryMap.keys()))==len(list_df)
+    
+    for country_name, df_data in zip(COUNTRY_LIST, list_df):
+        print("Writing data for: " + country_name)
+        file_name=country_name+".csv"
+        try:
+            df_data.to_csv(file_name, index=False)
+            print("Successfully created: " + file_name)
+        except:
+            print("Error in writing to: " + file_name)
+
+
+# In[43]:
+
+
+write_data()
+
+
+# ## Reading the clean data from CSV files
+
+# In[44]:
+
+
+try:
+    df_cleaned_us=pd.read_csv('USA.csv')
+    df_cleaned_in=pd.read_csv('India.csv')
+    df_cleaned_cn=pd.read_csv('China.csv')
+    df_cleaned_jp=pd.read_csv('Japan.csv')
+    df_cleaned_ca=pd.read_csv('Canada.csv')
+    df_cleaned_gb=pd.read_csv('Great Britain.csv')
+    df_cleaned_za=pd.read_csv('South Africa.csv')
+    print("Successfully read all the files")
+except:
+    print("Unexpected error in reading a file. Check the file path and if a file exists with the name given.")
+
+print("Displaying data for USA: ")
+display(df_cleaned_us.head())
+
+list_cleaned_df=[df_cleaned_us, df_cleaned_in, df_cleaned_cn, df_cleaned_jp, df_cleaned_ca, df_cleaned_gb, df_cleaned_za]
+
+
+# ## Preparing DataFrame
+
+# In[45]:
+
+
+combined_df=pd.concat(list_cleaned_df,sort=False)
+combined_df.head(200)
+
+
+# ## Descriptive Statistics
+
+# In[46]:
+
+
+df_copy=combined_df.drop(['Year', 'Country'], axis='columns')
+df_copy.describe()
+
+
+# ## Correlation Matrix
+# 
+
+# In[47]:
+
+
+df_cleaned_us_copy=df_cleaned_us.copy()
+df_cleaned_us_copy.drop(['Year', 'Country'], inplace=True, axis='columns')
+
+fig, ax = plt.subplots(figsize=(15,15))
+sns.heatmap(df_cleaned_us_copy.corr(), cmap='RdBu', center=0,ax=ax)
+plt.savefig('correlation_us.png')
+plt.show()
+
+
+# ## Analysis Using Plots
+
+# ### Total access to electricity
+# 
+
+# In[48]:
+
+
+combined_df.columns
+
+
+# In[49]:
+
+
+list_countries = COUNTRY_LIST
+df_00 = pd.DataFrame()
+df_18 = pd.DataFrame()
+
+for i,df in enumerate(list_cleaned_df):
+    df_00[list_countries[i]] = df[df['Year'] == 2000]["Access to electricity (% of population)"]
+    df_18[list_countries[i]] = df[df['Year'] == 2018]["Access to electricity (% of population)"]
+
+df_00 = df_00.T
+df_18 = df_18.T
+
+pd.options.display.float_format = '{:,.1f}'.format 
+
+df_00 = df_00.rename(columns={18 : 2000})
+df_18 = df_18.rename(columns={0 : 2018})
+
+df_both_years= df_00.join(df_18)
+
+df_both_years['Countries'] = df_both_years.index
+
+df_both_years.reset_index(drop=True)
+
+print("Acess to electricity:")
+display(df_both_years)
+
+
+# In[50]:
+
+
+plt.figure(figsize=(7, 5))
+df_both_years.plot(kind='bar',x='Countries',y=[2000, 2018])
+
+
+# ### Access to electricity vs CO2 emissions
+
+# In[51]:
+
+
+def group_df(feature):
+    df_grouped=pd.DataFrame()
+
+    df_grouped['Avg. ' + feature]=combined_df.groupby('Country')[feature].mean()
+
+    df_grouped['Country']=df_grouped.index
+
+    df_grouped.reset_index(drop=True, inplace=True)
+
+    df_grouped.sort_values('Avg. '+feature, inplace=True, ascending=False)
+
+    print("Avg. " + feature)
+    display(df_grouped)
+    
+    return df_grouped
+
+def plot_bar(df, x_feature, y_feature):
+    # bar plot
+    plt.figure(figsize=(8, 5))
+    sns.set(style="whitegrid")
+    ax = sns.barplot(
+        data= df,
+        x= x_feature,
+        y= "Avg. " + y_feature)
+
+
+# In[23]:
+
+
+import seaborn
+seaborn.barplot(data=combined_df[0:100], x="CO2 emissions (metric tons per capita)", y="Access to electricity (% of population)", hue= "Country")
+
+
+# ### Access to electricity vs year
+
+# In[52]:
+
+
+from matplotlib.collections import LineCollection
+from matplotlib.colors import ListedColormap, BoundaryNorm
+
+def extract_columns(df_cleaned):
+    df=pd.DataFrame()
+    df['Year']=df_cleaned.loc[:100, 'Year']
+    df['Access to electricity (% of population)']=df_cleaned.loc[:100, 'Access to electricity (% of population)']
+    df['CO2 emissions (metric tons per capita)']=df_cleaned.loc[:100, 'CO2 emissions (metric tons per capita)']
+    df['Country']=df_cleaned.loc[:100, 'Country']
+    return df
+
+def form_gdp_df():
+    # function call to extract_columns()
+    indf=extract_columns(df_cleaned_in)
+    usdf=extract_columns(df_cleaned_us)
+    cndf=extract_columns(df_cleaned_cn)
+    jpdf=extract_columns(df_cleaned_jp)
+    cadf=extract_columns(df_cleaned_ca)
+    gbdf=extract_columns(df_cleaned_gb)
+    zadf=extract_columns(df_cleaned_za)
+
+    gdp_df=pd.concat([indf, usdf, cndf, jpdf, cadf, gbdf, zadf], ignore_index=True)
+    return gdp_df
+
+
+
+gdp_df=form_gdp_df()
+
+print("Few records from the Dataframe containing Year, Access to electricity and Co2 emission:")
+display(gdp_df.head())
+
+
+x =  df['Year'].index 
+y = df['Access to electricity (% of population)']
+z = df['CO2 emissions (metric tons per capita)']
+
+points = np.array([x, y]).T.reshape(-1, 1, 2)
+segments = np.concatenate([points[:-1], points[1:]], axis=1)
+
+
+fig, ax = plt.subplots(figsize =(12,6))
+
+# Create a continuous norm to map from data points to colors
+norm = plt.Normalize(z.min(), z.max())
+lc = LineCollection(segments, cmap='Greens', norm=norm)
+lc.set_array(z)
+lc.set_linewidth(5)
+ax.add_collection(lc)
+
+ax.autoscale()
+fig.colorbar( lc, ax= ax, label='average square feet')
+ax.set_xlabel('year', size = 10)
+ax.set_ylabel('Access to electricity', size = 10)
+ax.set_title('CO2 emissions (metric tons per capita)', size = 14)
+
+plt.sci(lc)
+plt.show()
+
+
+# ### Variation in consumption of energy over the years for India
+
+# In[53]:
+
+
+df_cleaned_in.columns
+
+
+# In[54]:
+
+
+plt.plot(df_cleaned_in.loc[4:, ['Year']],df_cleaned_in.loc[4:, ['Access to electricity (% of population)']],'.-')
+plt.plot(df_cleaned_in.loc[4:, ['Year']],df_cleaned_in.loc[4:, ['Access to clean fuels and technologies for cooking (% of population)']],'.-')
+plt.plot(df_cleaned_in.loc[4:, ['Year']],df_cleaned_in.loc[4:, ['CO2 emissions (metric tons per capita)']],'.-')
+plt.plot(df_cleaned_in.loc[4:, ['Year']],df_cleaned_in.loc[4:, ['Renewable energy consumption (% of total final energy consumption)']],'.-')
+
+plt.legend(['CO2 emissions (metric tons per capita)',
+            'Access to clean fuels and technologies for cooking (% of population)',
+            'Access to electricity (% of population)', 'Renewable energy consumption (% of total final energy consumption)'], loc='best')
+plt.title("Levels of Indicators\n")
+plt.xlabel('Year')
+plt.ylabel('Percentage')
+plt.show()
+
+
+# ### CO2 Emission value country wise
+
+# In[55]:
+
+
+list_countries=COUNTRY_LIST
+
+df_CO2=pd.DataFrame()
+
+
+for i,df in enumerate(list_cleaned_df):
+    df_CO2[list_countries[i]]=df[df['Year'] == 2015]["CO2 emissions (metric tons per capita)"]
+
+
+df_CO2=df_CO2.T
+
+pd.options.display.float_format = '{:,.1f}'.format  
+
+df_CO2 ['Countries'] = df_CO2.index
+df_CO2.reset_index(drop=True, inplace=True)
+df_CO2=df_CO2.rename(columns={3: "CO2 emissions (metric tons per capita)"})
+
+df_CO2.sort_values('CO2 emissions (metric tons per capita)', inplace=True, ascending=False)
+
+print("CO2 emissions (metric tons per capita) for 2015: ")
+display(df_CO2)
+
+plt.figure(figsize=(8, 5))
+sns.set(style="whitegrid")
+ax = sns.barplot(
+    data= df_CO2,
+    x= 'Countries',
+    y= 'CO2 emissions (metric tons per capita)')
+
+
+# In[56]:
+
+
+# scatter plot between income and age 
+plt.scatter(df['Access to electricity (% of population)'], df['Renewable energy consumption (% of total final energy consumption)']) 
+plt.show() 
+
+# scatter plot between income and sales 
+plt.scatter(df['CO2 emissions (metric tons per capita)'], df['Renewable energy consumption (% of total final energy consumption)']) 
+plt.show() 
+
+# scatter plot between sales and age 
+plt.scatter(df['Energy intensity level of primary energy (MJ/$2017 PPP GDP)'], df['Renewable energy consumption (% of total final energy consumption)']) 
+plt.show() 
+
+LARS-ADS_Copy 1.py
+Displaying LARS-ADS_Copy 1.py.
